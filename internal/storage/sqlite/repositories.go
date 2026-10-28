@@ -302,7 +302,7 @@ func (s *Store) UpsertIdentity(identity Identity) error {
 		ON CONFLICT(account_id, kind, canonical_value) DO UPDATE SET
 			raw_value = excluded.raw_value,
 			display_name = excluded.display_name,
-			is_self = excluded.is_self,
+			is_self = CASE WHEN identities.is_self != 0 OR excluded.is_self != 0 THEN 1 ELSE 0 END,
 			metadata_json = excluded.metadata_json,
 			updated_at_ms = excluded.updated_at_ms
 	`,

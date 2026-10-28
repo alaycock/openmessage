@@ -497,19 +497,75 @@ func findDirectSMSConversation(reads readsource.ReadSource, phone string) (*db.C
 			continue
 		}
 		var participants []struct {
-			Number string `json:"number"`
-			Phone  string `json:"phone"`
+			Number    string `json:"number"`
+			Phone     string `json:"phone"`
+			IsMe      bool   `json:"is_me"`
+			ContactID string `json:"contact_id"`
 		}
 		if err := json.Unmarshal([]byte(conversation.Participants), &participants); err != nil {
 			continue
 		}
-		for _, participant := range participants {
-			if phoneDigitsMatch(digits, firstNonEmpty(participant.Number, participant.Phone)) {
-				return conversation, nil
-			}
+		if directSMSParticipantsMatch(digits, participants) {
+			return conversation, nil
 		}
 	}
 	return nil, nil
+}
+
+
+func directSMSParticipantsMatch(wantedDigits string, participants []struct {
+	Number    string `json:"number"`
+	Phone     string `json:"phone"`
+	IsMe      bool   `json:"is_me"`
+	ContactID string `json:"contact_id"`
+}) bool {
+	var selfNumbers []string
+	for _, p := range participants {
+		if p.IsMe || p.ContactID == "profile" {
+			if num := firstNonEmpty(p.Number, p.Phone); num != "" {
+				selfNumbers = append(selfNumbers, num)
+			}
+		}
+	}
+	isSelfNumber := func(num string) bool {
+		for _, selfNum := range selfNumbers {
+			if phoneDigitsMatch(digitsOnlyLast10(selfNum), num) {
+				return true
+			}
+		}
+		return false
+	}
+	hasNonSelfPeer := false
+	matchedPeer := false
+	matchedSelf := false
+	for _, p := range participants {
+		num := firstNonEmpty(p.Number, p.Phone)
+		if digitsOnly(num) == "" {
+			continue
+		}
+		if p.IsMe || p.ContactID == "profile" || isSelfNumber(num) {
+			if phoneDigitsMatch(wantedDigits, num) {
+				matchedSelf = true
+			}
+			continue
+		}
+		hasNonSelfPeer = true
+		if phoneDigitsMatch(wantedDigits, num) {
+			matchedPeer = true
+		}
+	}
+	if hasNonSelfPeer {
+		return matchedPeer
+	}
+	return matchedSelf
+}
+
+func digitsOnlyLast10(raw string) string {
+	d := digitsOnly(raw)
+	if len(d) > 10 {
+		return d[len(d)-10:]
+	}
+	return d
 }
 
 // phoneDigitsMatch reports whether a stored participant number denotes the

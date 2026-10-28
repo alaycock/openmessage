@@ -456,7 +456,7 @@ func googleConversationEvent(conversation *gmproto.Conversation) bridge.Event {
 			Identity: bridge.IdentityRef{
 				Raw:    number,
 				Name:   participant.GetFullName(),
-				IsSelf: participant.GetIsMe(),
+				IsSelf: participant.GetIsMe() || participant.GetContactID() == "profile",
 			},
 			Role:   "member",
 			Active: true,

@@ -107,3 +107,61 @@ func TestPersonToolsLabelTitlelessV2DirectThreadByPeer(t *testing.T) {
 		})
 	}
 }
+
+func TestFindDirectSMSConversationSkipsSelfParticipantOnPeerThread(t *testing.T) {
+	store, err := sqlite.Open(filepath.Join(t.TempDir(), "v2.sqlite3"))
+	if err != nil {
+		t.Fatalf("sqlite.Open(): %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	now := time.Now().UnixMilli()
+	if err := store.UpsertAccount(sqlite.Account{
+		AccountID: "google-primary", BridgeKey: "google_messages", DisplayName: "Google Messages",
+		Mode: sqlite.AccountModeLive, Enabled: true, ConfigJSON: "{}",
+		CreatedAtMS: now, UpdatedAtMS: now,
+	}); err != nil {
+		t.Fatalf("UpsertAccount(): %v", err)
+	}
+	if err := store.UpsertConversation(sqlite.Conversation{
+		ConversationID: "conv-peer", AccountID: "google-primary", RemoteConversationID: "2",
+		Kind: sqlite.ConversationKindDirect, Title: "Peer", NotificationMode: sqlite.NotificationModeAll,
+		MetadataJSON: "{}", LastMessageAtMS: now, CreatedAtMS: now, UpdatedAtMS: now,
+	}); err != nil {
+		t.Fatalf("UpsertConversation(): %v", err)
+	}
+	// First upsert marks self=true; second upsert with same canonical number and IsSelf=false
+	// (like a Google Messages "contact_id":"profile" duplicate participant) must not demote IsSelf.
+	for _, identity := range []sqlite.Identity{
+		{IdentityID: "id-self-1", AccountID: "google-primary", Kind: sqlite.IdentityKind("e164"),
+			CanonicalValue: "+15550009999", RawValue: "+15550009999", DisplayName: "Me", IsSelf: true,
+			MetadataJSON: "{}", CreatedAtMS: now, UpdatedAtMS: now},
+		{IdentityID: "id-self-profile", AccountID: "google-primary", Kind: sqlite.IdentityKind("e164"),
+			CanonicalValue: "+15550009999", RawValue: "+15550009999", DisplayName: "Me", IsSelf: false,
+			MetadataJSON: "{}", CreatedAtMS: now, UpdatedAtMS: now + 1},
+		{IdentityID: "id-peer", AccountID: "google-primary", Kind: sqlite.IdentityKind("e164"),
+			CanonicalValue: "+15550001234", RawValue: "+15550001234", DisplayName: "Peer", IsSelf: false,
+			MetadataJSON: "{}", CreatedAtMS: now, UpdatedAtMS: now},
+	} {
+		if err := store.UpsertIdentity(identity); err != nil {
+			t.Fatalf("UpsertIdentity(%s): %v", identity.IdentityID, err)
+		}
+	}
+	if err := store.ReplaceConversationParticipants("conv-peer", []sqlite.ConversationParticipant{
+		{AccountID: "google-primary", ConversationID: "conv-peer", IdentityID: "id-self-1", Role: sqlite.ParticipantRoleMember, IsActive: true},
+		{AccountID: "google-primary", ConversationID: "conv-peer", IdentityID: "id-peer", Role: sqlite.ParticipantRoleMember, IsActive: true},
+	}); err != nil {
+		t.Fatalf("ReplaceConversationParticipants(): %v", err)
+	}
+
+	reads := v2read.New(store)
+	if got, err := findDirectSMSConversation(reads, "+15550009999"); err != nil {
+		t.Fatalf("findDirectSMSConversation(self): %v", err)
+	} else if got != nil {
+		t.Fatalf("findDirectSMSConversation(self) matched peer thread %q (%s), want nil", got.ConversationID, got.Name)
+	}
+	if got, err := findDirectSMSConversation(reads, "+15550001234"); err != nil {
+		t.Fatalf("findDirectSMSConversation(peer): %v", err)
+	} else if got == nil || got.ConversationID != "conv-peer" {
+		t.Fatalf("findDirectSMSConversation(peer) = %#v, want conv-peer", got)
+	}
+}
